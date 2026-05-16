@@ -1,0 +1,904 @@
+---
+title: "Poisson_regression"
+author: "Mohamed-Yahya YAHYA & Mohamed SIDI & Lalla SIDI ABDOULLAH"
+date: "2026-05-16"
+output: html_document
+---
+
+
+
+```{r}
+#Lire la base de données et afficher les 6 premières lignes
+data <- read_excel("C:/Users/Hp/Downloads/competition_awards_data.xlsx", sep=";", dec=".", header=TRUE)
+head(data)
+```
+
+
+
+
+```{r}
+# ============================
+# Cellule 1 : Importation des données
+# ============================
+
+# Installer les packages si nécessaire
+if (!require(readxl)) install.packages("readxl")
+if (!require(dplyr)) install.packages("dplyr")
+
+# Charger les packages
+library(readxl)
+library(dplyr)
+
+# Importer la base Excel
+data <- read_excel("C:/Users/Hp/Downloads/competition_awards_data.xlsx")
+
+# Afficher les premières lignes
+head(data)
+
+# Afficher la structure des variables
+str(data)
+
+# Afficher les noms des variables
+names(data)
+
+# Dimensions de la base
+dim(data)
+```
+
+
+
+```{r}
+# ============================
+# Cellule 2 : Vérification de la nature des variables
+# ============================
+
+# Renommer la variable explicative pour éviter l'espace dans le nom
+data_clean <- data %>%
+  rename(Math_Score = `Math Score`)
+
+# Vérifier les noms après renommage
+names(data_clean)
+
+# Vérification des valeurs manquantes
+missing_values <- colSums(is.na(data_clean))
+print(missing_values)
+
+# Vérifier que Awards est une variable de comptage :
+# entière, positive ou nulle
+is_count_awards <- all(data_clean$Awards >= 0, na.rm = TRUE) &&
+                   all(data_clean$Awards == floor(data_clean$Awards), na.rm = TRUE)
+
+cat("Awards est-elle une variable de comptage ? :", is_count_awards, "\n")
+
+# Statistiques descriptives de la variable réponse Awards
+desc_awards <- data_clean %>%
+  summarise(
+    n = n(),
+    min_awards = min(Awards, na.rm = TRUE),
+    max_awards = max(Awards, na.rm = TRUE),
+    mean_awards = mean(Awards, na.rm = TRUE),
+    var_awards = var(Awards, na.rm = TRUE),
+    sd_awards = sd(Awards, na.rm = TRUE),
+    nb_zero = sum(Awards == 0, na.rm = TRUE),
+    prop_zero = mean(Awards == 0, na.rm = TRUE)
+  )
+
+print(desc_awards)
+
+# Statistiques descriptives de Math_Score
+desc_math <- data_clean %>%
+  summarise(
+    min_math = min(Math_Score, na.rm = TRUE),
+    max_math = max(Math_Score, na.rm = TRUE),
+    mean_math = mean(Math_Score, na.rm = TRUE),
+    sd_math = sd(Math_Score, na.rm = TRUE)
+  )
+
+print(desc_math)
+
+# Distribution empirique de Awards
+table_awards <- table(data_clean$Awards)
+print(table_awards)
+```
+
+
+
+```{r}
+# ============================
+# Cellule 3 : Analyse graphique descriptive
+# ============================
+
+# Installer ggplot2 si nécessaire
+if (!require(ggplot2)) install.packages("ggplot2")
+
+# Charger le package
+library(ggplot2)
+
+# 1. Distribution de la variable réponse Awards
+ggplot(data_clean, aes(x = factor(Awards))) +
+  geom_bar() +
+  labs(
+    title = "Distribution de la variable Awards",
+    x = "Nombre de récompenses (Awards)",
+    y = "Effectif"
+  )
+
+# 2. Distribution de la variable explicative Math_Score
+ggplot(data_clean, aes(x = Math_Score)) +
+  geom_histogram(bins = 15) +
+  labs(
+    title = "Distribution de Math_Score",
+    x = "Score en mathématiques",
+    y = "Effectif"
+  )
+
+# 3. Relation entre Math_Score et Awards
+ggplot(data_clean, aes(x = Math_Score, y = Awards)) +
+  geom_jitter(width = 0.4, height = 0.08, alpha = 0.6) +
+  geom_smooth(method = "glm", method.args = list(family = "poisson"), se = TRUE) +
+  labs(
+    title = "Relation entre Math_Score et Awards",
+    x = "Score en mathématiques",
+    y = "Nombre de récompenses"
+  )
+
+# 4. Corrélation indicative entre Math_Score et Awards
+cor_pearson <- cor(data_clean$Math_Score, data_clean$Awards, method = "pearson")
+cor_spearman <- cor(data_clean$Math_Score, data_clean$Awards, method = "spearman")
+
+cat("Corrélation de Pearson :", cor_pearson, "\n")
+cat("Corrélation de Spearman :", cor_spearman, "\n")
+```
+
+
+
+```{r}
+# ============================
+# Cellule 4 : Division apprentissage / validation
+# ============================
+
+set.seed(123)
+
+# Création d'une variable binaire utile pour stratifier la division
+# 0 : aucun award
+# 1 : au moins un award
+data_clean <- data_clean %>%
+  mutate(Awards_binary = ifelse(Awards > 0, 1, 0))
+
+# Indices des observations avec Awards = 0
+idx_zero <- which(data_clean$Awards_binary == 0)
+
+# Indices des observations avec Awards > 0
+idx_positive <- which(data_clean$Awards_binary == 1)
+
+# Tirage de 80% dans chaque groupe
+train_zero <- sample(idx_zero, size = floor(0.8 * length(idx_zero)))
+train_positive <- sample(idx_positive, size = floor(0.8 * length(idx_positive)))
+
+# Indices finaux de l'échantillon d'apprentissage
+train_index <- c(train_zero, train_positive)
+
+# Construction des deux échantillons
+train_data <- data_clean[train_index, ]
+test_data <- data_clean[-train_index, ]
+
+# Vérification des dimensions
+cat("Dimension train_data :", dim(train_data), "\n")
+cat("Dimension test_data  :", dim(test_data), "\n")
+
+# Vérification de la distribution de Awards dans chaque échantillon
+cat("\nDistribution de Awards dans train_data :\n")
+print(table(train_data$Awards))
+
+cat("\nDistribution de Awards dans test_data :\n")
+print(table(test_data$Awards))
+
+# Vérification de la proportion de zéros dans chaque échantillon
+cat("\nProportion de zéros dans train_data :\n")
+print(mean(train_data$Awards == 0))
+
+cat("\nProportion de zéros dans test_data :\n")
+print(mean(test_data$Awards == 0))
+
+# Moyenne et variance de Awards dans train et test
+cat("\nMoyenne et variance de Awards dans train_data :\n")
+print(c(mean = mean(train_data$Awards), variance = var(train_data$Awards)))
+
+cat("\nMoyenne et variance de Awards dans test_data :\n")
+print(c(mean = mean(test_data$Awards), variance = var(test_data$Awards)))
+```
+
+
+
+```{r}
+# ============================
+# Cellule 5 : Estimation du modèle de Poisson
+# ============================
+
+# Ajustement du modèle de Poisson sur l'échantillon d'apprentissage
+model_pois_1 <- glm(
+  Awards ~ Math_Score,
+  family = poisson(link = "log"),
+  data = train_data
+)
+
+# Résumé du modèle : coefficients, erreurs standards, z-values, p-values
+summary(model_pois_1)
+
+# Coefficients estimés beta
+coef_beta <- coef(model_pois_1)
+print(coef_beta)
+
+# Effets multiplicatifs exp(beta)
+coef_exp <- exp(coef(model_pois_1))
+print(coef_exp)
+
+# Intervalles de confiance de Wald à 95% pour beta
+conf_beta <- confint.default(model_pois_1)
+print(conf_beta)
+
+# Intervalles de confiance de Wald à 95% pour exp(beta)
+conf_exp <- exp(conf_beta)
+print(conf_exp)
+
+# Effet en pourcentage de Math_Score
+effect_percent <- (exp(coef(model_pois_1)["Math_Score"]) - 1) * 100
+cat("Effet en pourcentage d'un point supplémentaire de Math_Score :", 
+    effect_percent, "%\n")
+```
+
+
+```{r}
+# ============================
+# Cellule 6 : Test global du modèle
+# ============================
+
+# Modèle réduit à la constante
+model_pois_null <- glm(
+  Awards ~ 1,
+  family = poisson(link = "log"),
+  data = train_data
+)
+
+# Comparaison du modèle réduit et du modèle complet
+anova_global <- anova(
+  model_pois_null,
+  model_pois_1,
+  test = "Chisq"
+)
+
+print(anova_global)
+
+# Calcul manuel de la statistique du rapport de vraisemblance
+D_null <- deviance(model_pois_null)
+D_full <- deviance(model_pois_1)
+
+LR_stat <- D_null - D_full
+df_LR <- df.residual(model_pois_null) - df.residual(model_pois_1)
+p_value_LR <- pchisq(LR_stat, df = df_LR, lower.tail = FALSE)
+
+cat("Déviance du modèle réduit :", D_null, "\n")
+cat("Déviance du modèle complet :", D_full, "\n")
+cat("Statistique LR :", LR_stat, "\n")
+cat("Degrés de liberté :", df_LR, "\n")
+cat("p-value du test LR :", p_value_LR, "\n")
+
+# Pseudo R2 basé sur la déviance
+pseudo_R2 <- 1 - (D_full / D_null)
+
+cat("Pseudo R2 :", pseudo_R2, "\n")
+```
+
+
+```{r}
+# ============================
+# Cellule 7 : Adéquation du modèle de Poisson
+# ============================
+
+# Déviance résiduelle et degrés de liberté
+D_res <- deviance(model_pois_1)
+df_res <- df.residual(model_pois_1)
+
+# Test d'adéquation basé sur la déviance
+p_value_deviance <- pchisq(D_res, df = df_res, lower.tail = FALSE)
+
+# Résidus de Pearson
+res_pearson <- residuals(model_pois_1, type = "pearson")
+
+# Statistique de Pearson
+X2_pearson <- sum(res_pearson^2)
+
+# Test d'adéquation basé sur Pearson
+p_value_pearson <- pchisq(X2_pearson, df = df_res, lower.tail = FALSE)
+
+# Indicateurs de dispersion
+dispersion_deviance <- D_res / df_res
+dispersion_pearson <- X2_pearson / df_res
+
+# Affichage des résultats
+cat("Déviance résiduelle :", D_res, "\n")
+cat("Degrés de liberté :", df_res, "\n")
+cat("p-value du test de déviance :", p_value_deviance, "\n")
+cat("Rapport Déviance / ddl :", dispersion_deviance, "\n\n")
+
+cat("Statistique de Pearson :", X2_pearson, "\n")
+cat("p-value du test de Pearson :", p_value_pearson, "\n")
+cat("Rapport Pearson / ddl :", dispersion_pearson, "\n")
+```
+
+
+
+```{r}
+# ============================
+# Cellule 8 : Diagnostic des résidus du modèle de Poisson
+# ============================
+
+# Valeurs ajustées
+train_data$fitted_pois <- fitted(model_pois_1)
+
+# Résidus de Pearson
+train_data$res_pearson <- residuals(model_pois_1, type = "pearson")
+
+# Résidus de déviance
+train_data$res_deviance <- residuals(model_pois_1, type = "deviance")
+
+# Résumé numérique des valeurs ajustées et des résidus
+cat("Résumé des valeurs ajustées :\n")
+print(summary(train_data$fitted_pois))
+
+cat("\nRésumé des résidus de Pearson :\n")
+print(summary(train_data$res_pearson))
+
+cat("\nRésumé des résidus de déviance :\n")
+print(summary(train_data$res_deviance))
+
+# Nombre de résidus de Pearson fortement atypiques
+cat("\nNombre de résidus de Pearson avec |r| > 2 :\n")
+print(sum(abs(train_data$res_pearson) > 2))
+
+cat("\nNombre de résidus de déviance avec |r| > 2 :\n")
+print(sum(abs(train_data$res_deviance) > 2))
+
+# 1. Résidus de Pearson vs valeurs ajustées
+ggplot(train_data, aes(x = fitted_pois, y = res_pearson)) +
+  geom_point(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Résidus de Pearson vs valeurs ajustées",
+    x = "Valeurs ajustées",
+    y = "Résidus de Pearson"
+  )
+
+# 2. Résidus de déviance vs valeurs ajustées
+ggplot(train_data, aes(x = fitted_pois, y = res_deviance)) +
+  geom_point(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Résidus de déviance vs valeurs ajustées",
+    x = "Valeurs ajustées",
+    y = "Résidus de déviance"
+  )
+
+# 3. Observations vs valeurs ajustées
+ggplot(train_data, aes(x = fitted_pois, y = Awards)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(
+    title = "Awards observés vs valeurs ajustées",
+    x = "Valeurs ajustées",
+    y = "Awards observés"
+  )
+
+# 4. QQ-plot des résidus de déviance
+qqnorm(train_data$res_deviance, main = "QQ-plot des résidus de déviance")
+qqline(train_data$res_deviance)
+```
+
+
+```{r}
+# ============================
+# Cellule 9 : Validation prédictive sur l'échantillon test
+# ============================
+
+# Prédiction du nombre moyen attendu d'Awards sur l'échantillon test
+test_data$pred_lambda <- predict(
+  model_pois_1,
+  newdata = test_data,
+  type = "response"
+)
+
+# Comparaison des valeurs observées et prédites
+comparison_test <- test_data %>%
+  select(Awards, Math_Score, pred_lambda) %>%
+  mutate(
+    erreur = Awards - pred_lambda,
+    erreur_absolue = abs(erreur),
+    erreur_quadratique = erreur^2
+  )
+
+# Afficher les premières lignes de comparaison
+print(head(comparison_test, 10))
+
+# Indicateurs de performance prédictive
+MAE_test <- mean(comparison_test$erreur_absolue)
+RMSE_test <- sqrt(mean(comparison_test$erreur_quadratique))
+
+# Moyenne observée et moyenne prédite
+mean_observed_test <- mean(test_data$Awards)
+mean_predicted_test <- mean(test_data$pred_lambda)
+
+cat("Moyenne observée sur test_data :", mean_observed_test, "\n")
+cat("Moyenne prédite sur test_data  :", mean_predicted_test, "\n")
+cat("MAE sur test_data :", MAE_test, "\n")
+cat("RMSE sur test_data :", RMSE_test, "\n")
+
+# Déviance de Poisson sur l'échantillon test
+y_test <- test_data$Awards
+mu_test <- test_data$pred_lambda
+
+poisson_deviance_test <- 2 * sum(
+  ifelse(
+    y_test == 0,
+    mu_test,
+    y_test * log(y_test / mu_test) - (y_test - mu_test)
+  )
+)
+
+cat("Déviance de Poisson sur test_data :", poisson_deviance_test, "\n")
+
+# Graphique : Awards observés vs prédictions sur l'échantillon test
+ggplot(test_data, aes(x = pred_lambda, y = Awards)) +
+  geom_point(alpha = 0.8) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(
+    title = "Validation : Awards observés vs valeurs prédites",
+    x = "Valeurs prédites par le modèle de Poisson",
+    y = "Awards observés"
+  )
+```
+
+
+```{r}
+# ============================
+# Cellule 10 : Courbe ROC sur l'échantillon test
+# ============================
+
+# Installer le package pROC si nécessaire
+if (!require(pROC)) install.packages("pROC")
+
+# Charger le package
+library(pROC)
+
+# Probabilité prédite d'avoir au moins un award :
+# P(Y > 0) = 1 - P(Y = 0) = 1 - exp(-lambda)
+test_data$pred_prob_positive <- 1 - exp(-test_data$pred_lambda)
+
+# Construction de la courbe ROC
+roc_pois <- roc(
+  response = test_data$Awards_binary,
+  predictor = test_data$pred_prob_positive,
+  levels = c(0, 1),
+  direction = "<"
+)
+
+# Afficher l'AUC
+auc_pois <- auc(roc_pois)
+
+cat("AUC du modèle de Poisson sur test_data :", auc_pois, "\n")
+
+# Tracer la courbe ROC
+plot(
+  roc_pois,
+  main = "Courbe ROC du modèle de Poisson sur l'échantillon test",
+  legacy.axes = TRUE
+)
+
+# Ajouter la diagonale de référence
+abline(a = 0, b = 1, lty = 2)
+
+# Seuil optimal selon l'indice de Youden
+best_threshold <- coords(
+  roc_pois,
+  x = "best",
+  best.method = "youden",
+  ret = c("threshold", "sensitivity", "specificity", "accuracy")
+)
+
+cat("\nSeuil optimal selon Youden :\n")
+print(best_threshold)
+```
+
+
+```{r}
+# ============================
+# Cellule 11 : Matrice de confusion avec le seuil optimal
+# ============================
+
+# Extraire le seuil optimal obtenu par Youden
+threshold_youden <- as.numeric(best_threshold["threshold"])
+
+# Classification prédite selon le seuil optimal
+test_data$pred_class_youden <- ifelse(
+  test_data$pred_prob_positive >= threshold_youden,
+  1,
+  0
+)
+
+# Matrice de confusion
+conf_matrix_youden <- table(
+  Observé = test_data$Awards_binary,
+  Prédit = test_data$pred_class_youden
+)
+
+print(conf_matrix_youden)
+
+# Calcul manuel des indicateurs
+TN <- conf_matrix_youden["0", "0"]
+FP <- conf_matrix_youden["0", "1"]
+FN <- conf_matrix_youden["1", "0"]
+TP <- conf_matrix_youden["1", "1"]
+
+accuracy_youden <- (TP + TN) / sum(conf_matrix_youden)
+sensitivity_youden <- TP / (TP + FN)
+specificity_youden <- TN / (TN + FP)
+precision_youden <- TP / (TP + FP)
+f1_youden <- 2 * precision_youden * sensitivity_youden / 
+  (precision_youden + sensitivity_youden)
+
+cat("Seuil optimal de Youden :", threshold_youden, "\n")
+cat("Accuracy :", accuracy_youden, "\n")
+cat("Sensibilité :", sensitivity_youden, "\n")
+cat("Spécificité :", specificity_youden, "\n")
+cat("Précision :", precision_youden, "\n")
+cat("F1-score :", f1_youden, "\n")
+```
+
+
+```{r}
+# ============================
+# Cellule 12 : Synthèse structurée des résultats
+# ============================
+
+# 1. Tableau des coefficients du modèle de Poisson
+coef_summary <- summary(model_pois_1)$coefficients
+
+table_coefficients <- data.frame(
+  Variable = rownames(coef_summary),
+  Estimate = coef_summary[, "Estimate"],
+  Std_Error = coef_summary[, "Std. Error"],
+  Z_value = coef_summary[, "z value"],
+  P_value = coef_summary[, "Pr(>|z|)"],
+  Exp_Beta = exp(coef(model_pois_1)),
+  CI_lower_exp = exp(confint.default(model_pois_1)[, 1]),
+  CI_upper_exp = exp(confint.default(model_pois_1)[, 2])
+)
+
+cat("Tableau des coefficients :\n")
+print(table_coefficients)
+
+
+# 2. Tableau de significativité globale
+table_global_test <- data.frame(
+  Deviance_null = D_null,
+  Deviance_full = D_full,
+  LR_statistic = LR_stat,
+  Degrees_freedom = df_LR,
+  P_value = p_value_LR,
+  Pseudo_R2 = pseudo_R2
+)
+
+cat("\nTest global du modèle :\n")
+print(table_global_test)
+
+
+# 3. Tableau d'adéquation du modèle
+table_adequation <- data.frame(
+  Residual_deviance = D_res,
+  Degrees_freedom = df_res,
+  P_value_deviance = p_value_deviance,
+  Deviance_over_df = dispersion_deviance,
+  Pearson_statistic = X2_pearson,
+  P_value_Pearson = p_value_pearson,
+  Pearson_over_df = dispersion_pearson
+)
+
+cat("\nAdéquation du modèle :\n")
+print(table_adequation)
+
+
+# 4. Tableau de validation prédictive sur test_data
+table_validation <- data.frame(
+  Mean_observed_test = mean_observed_test,
+  Mean_predicted_test = mean_predicted_test,
+  MAE = MAE_test,
+  RMSE = RMSE_test,
+  Poisson_deviance_test = poisson_deviance_test
+)
+
+cat("\nValidation prédictive sur l'échantillon test :\n")
+print(table_validation)
+
+
+# 5. Tableau de performance ROC et classification
+table_classification <- data.frame(
+  Threshold_Youden = threshold_youden,
+  AUC = as.numeric(auc_pois),
+  Accuracy = as.numeric(accuracy_youden),
+  Sensitivity = as.numeric(sensitivity_youden),
+  Specificity = as.numeric(specificity_youden),
+  Precision = as.numeric(precision_youden),
+  F1_score = as.numeric(f1_youden),
+  TN = as.numeric(TN),
+  FP = as.numeric(FP),
+  FN = as.numeric(FN),
+  TP = as.numeric(TP)
+)
+
+cat("\nPerformance ROC et classification :\n")
+print(table_classification)
+```
+
+
+```{r}
+# ============================
+# Cellule 13 : Comparaison avec un modèle de Poisson quadratique
+# ============================
+
+# Ajustement du modèle quadratique sur l'échantillon d'apprentissage
+model_pois_2 <- glm(
+  Awards ~ Math_Score + I(Math_Score^2),
+  family = poisson(link = "log"),
+  data = train_data
+)
+
+# Résumé du modèle quadratique
+summary(model_pois_2)
+
+# Comparaison AIC des deux modèles
+AIC_comparison <- data.frame(
+  Model = c("M1 : Poisson simple", "M2 : Poisson quadratique"),
+  AIC = c(AIC(model_pois_1), AIC(model_pois_2))
+)
+
+print(AIC_comparison)
+
+# Test du rapport de vraisemblance entre M1 et M2
+anova_m1_m2 <- anova(
+  model_pois_1,
+  model_pois_2,
+  test = "Chisq"
+)
+
+print(anova_m1_m2)
+
+# Prédiction sur l'échantillon test avec le modèle quadratique
+test_data$pred_lambda_m2 <- predict(
+  model_pois_2,
+  newdata = test_data,
+  type = "response"
+)
+
+# Probabilité prédite d'avoir au moins un award pour M2
+test_data$pred_prob_positive_m2 <- 1 - exp(-test_data$pred_lambda_m2)
+
+# ROC du modèle quadratique
+roc_pois_m2 <- roc(
+  response = test_data$Awards_binary,
+  predictor = test_data$pred_prob_positive_m2,
+  levels = c(0, 1),
+  direction = "<"
+)
+
+auc_pois_m2 <- auc(roc_pois_m2)
+
+# Comparaison des AUC
+ROC_comparison <- data.frame(
+  Model = c("M1 : Poisson simple", "M2 : Poisson quadratique"),
+  AUC = c(as.numeric(auc_pois), as.numeric(auc_pois_m2))
+)
+
+print(ROC_comparison)
+
+# Comparaison graphique des courbes ROC
+plot(
+  roc_pois,
+  main = "Comparaison des courbes ROC : M1 vs M2",
+  legacy.axes = TRUE
+)
+
+lines(roc_pois_m2, lty = 2)
+
+legend(
+  "bottomright",
+  legend = c(
+    paste("M1 simple - AUC =", round(as.numeric(auc_pois), 4)),
+    paste("M2 quadratique - AUC =", round(as.numeric(auc_pois_m2), 4))
+  ),
+  lty = c(1, 2),
+  bty = "n"
+)
+```
+
+
+```{r}
+# ============================
+# Cellule 14 : Validation prédictive de M2 et comparaison avec M1
+# ============================
+
+# Erreurs de prédiction du modèle quadratique sur test_data
+comparison_test_m2 <- test_data %>%
+  select(Awards, Math_Score, pred_lambda_m2) %>%
+  mutate(
+    erreur_m2 = Awards - pred_lambda_m2,
+    erreur_absolue_m2 = abs(erreur_m2),
+    erreur_quadratique_m2 = erreur_m2^2
+  )
+
+# Indicateurs de performance prédictive pour M2
+MAE_test_m2 <- mean(comparison_test_m2$erreur_absolue_m2)
+RMSE_test_m2 <- sqrt(mean(comparison_test_m2$erreur_quadratique_m2))
+
+# Moyenne prédite par M2
+mean_predicted_test_m2 <- mean(test_data$pred_lambda_m2)
+
+# Déviance de Poisson sur l'échantillon test pour M2
+mu_test_m2 <- test_data$pred_lambda_m2
+
+poisson_deviance_test_m2 <- 2 * sum(
+  ifelse(
+    y_test == 0,
+    mu_test_m2,
+    y_test * log(y_test / mu_test_m2) - (y_test - mu_test_m2)
+  )
+)
+
+# Tableau comparatif M1 vs M2 sur l'échantillon test
+table_validation_comparison <- data.frame(
+  Model = c("M1 : Poisson simple", "M2 : Poisson quadratique"),
+  Mean_observed_test = c(mean_observed_test, mean_observed_test),
+  Mean_predicted_test = c(mean_predicted_test, mean_predicted_test_m2),
+  MAE = c(MAE_test, MAE_test_m2),
+  RMSE = c(RMSE_test, RMSE_test_m2),
+  Poisson_deviance_test = c(poisson_deviance_test, poisson_deviance_test_m2),
+  AUC = c(as.numeric(auc_pois), as.numeric(auc_pois_m2)),
+  AIC = c(AIC(model_pois_1), AIC(model_pois_2))
+)
+
+print(table_validation_comparison)
+```
+
+
+```{r}
+# ============================
+# Cellule 15 : Adéquation du modèle quadratique M2
+# ============================
+
+# Déviance résiduelle et degrés de liberté du modèle quadratique
+D_res_m2 <- deviance(model_pois_2)
+df_res_m2 <- df.residual(model_pois_2)
+
+# Test d'adéquation basé sur la déviance
+p_value_deviance_m2 <- pchisq(D_res_m2, df = df_res_m2, lower.tail = FALSE)
+
+# Résidus de Pearson du modèle quadratique
+res_pearson_m2 <- residuals(model_pois_2, type = "pearson")
+
+# Statistique de Pearson
+X2_pearson_m2 <- sum(res_pearson_m2^2)
+
+# Test d'adéquation basé sur Pearson
+p_value_pearson_m2 <- pchisq(X2_pearson_m2, df = df_res_m2, lower.tail = FALSE)
+
+# Indicateurs de dispersion
+dispersion_deviance_m2 <- D_res_m2 / df_res_m2
+dispersion_pearson_m2 <- X2_pearson_m2 / df_res_m2
+
+# Tableau d'adéquation de M2
+table_adequation_m2 <- data.frame(
+  Model = "M2 : Poisson quadratique",
+  Residual_deviance = D_res_m2,
+  Degrees_freedom = df_res_m2,
+  P_value_deviance = p_value_deviance_m2,
+  Deviance_over_df = dispersion_deviance_m2,
+  Pearson_statistic = X2_pearson_m2,
+  P_value_Pearson = p_value_pearson_m2,
+  Pearson_over_df = dispersion_pearson_m2
+)
+
+print(table_adequation_m2)
+
+# Résumé des résidus de Pearson et de déviance
+cat("\nRésumé des résidus de Pearson de M2 :\n")
+print(summary(residuals(model_pois_2, type = "pearson")))
+
+cat("\nRésumé des résidus de déviance de M2 :\n")
+print(summary(residuals(model_pois_2, type = "deviance")))
+
+# Nombre de résidus atypiques
+cat("\nNombre de résidus de Pearson avec |r| > 2 :\n")
+print(sum(abs(residuals(model_pois_2, type = "pearson")) > 2))
+
+cat("\nNombre de résidus de déviance avec |r| > 2 :\n")
+print(sum(abs(residuals(model_pois_2, type = "deviance")) > 2))
+```
+
+```{r}
+# ============================
+# Cellule 16 : Diagnostic des observations influentes de M2
+# ============================
+
+# Construction d'une table de diagnostic pour le modèle quadratique
+diagnostic_m2 <- train_data %>%
+  mutate(
+    index = row_number(),
+    fitted_m2 = fitted(model_pois_2),
+    res_pearson_m2 = residuals(model_pois_2, type = "pearson"),
+    res_deviance_m2 = residuals(model_pois_2, type = "deviance"),
+    leverage_m2 = hatvalues(model_pois_2),
+    cooks_m2 = cooks.distance(model_pois_2)
+  )
+
+# Seuils usuels d'alerte
+n_train <- nrow(train_data)
+k_m2 <- length(coef(model_pois_2))
+
+threshold_leverage <- 2 * k_m2 / n_train
+threshold_cook <- 4 / n_train
+
+cat("Seuil leverage :", threshold_leverage, "\n")
+cat("Seuil Cook distance :", threshold_cook, "\n")
+
+# Observations avec résidu de Pearson atypique
+cat("\nObservations avec |résidu de Pearson| > 2 :\n")
+print(
+  diagnostic_m2 %>%
+    filter(abs(res_pearson_m2) > 2) %>%
+    select(index, Awards, Math_Score, fitted_m2, res_pearson_m2, res_deviance_m2, leverage_m2, cooks_m2)
+)
+
+# Observations avec leverage élevé
+cat("\nObservations avec leverage élevé :\n")
+print(
+  diagnostic_m2 %>%
+    filter(leverage_m2 > threshold_leverage) %>%
+    select(index, Awards, Math_Score, fitted_m2, res_pearson_m2, res_deviance_m2, leverage_m2, cooks_m2)
+)
+
+# Observations avec distance de Cook élevée
+cat("\nObservations avec distance de Cook élevée :\n")
+print(
+  diagnostic_m2 %>%
+    filter(cooks_m2 > threshold_cook) %>%
+    select(index, Awards, Math_Score, fitted_m2, res_pearson_m2, res_deviance_m2, leverage_m2, cooks_m2)
+)
+
+# Top 10 des observations les plus influentes selon Cook
+cat("\nTop 10 des observations selon la distance de Cook :\n")
+print(
+  diagnostic_m2 %>%
+    arrange(desc(cooks_m2)) %>%
+    select(index, Awards, Math_Score, fitted_m2, res_pearson_m2, res_deviance_m2, leverage_m2, cooks_m2) %>%
+    head(10)
+)
+
+# Graphique : distance de Cook
+ggplot(diagnostic_m2, aes(x = index, y = cooks_m2)) +
+  geom_point(alpha = 0.8) +
+  geom_hline(yintercept = threshold_cook, linetype = "dashed") +
+  labs(
+    title = "Distance de Cook - Modèle M2",
+    x = "Index de l'observation",
+    y = "Distance de Cook"
+  )
+
+# Graphique : leverage
+ggplot(diagnostic_m2, aes(x = index, y = leverage_m2)) +
+  geom_point(alpha = 0.8) +
+  geom_hline(yintercept = threshold_leverage, linetype = "dashed") +
+  labs(
+    title = "Leverage - Modèle M2",
+    x = "Index de l'observation",
+    y = "Leverage"
+  )
+```
+
